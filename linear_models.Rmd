@@ -236,3 +236,35 @@ nested_lm_results %>%
   )
 ```
 
+
+Let's do an even more extreme example!!!!
+
+```{r}
+#fitting a linear model for each neighborhood in Manhattan 
+manhattan_analysis <- 
+  nyc_airbnb %>%
+  filter(
+    borough == "Manhattan"
+  ) %>%
+  nest(data = -neighbourhood) %>%
+  mutate(
+    fits = map(data, \(df) lm(price ~ stars + room_type, data = df)),
+    results = map(fits, broom::tidy)
+  ) %>%
+  select(neighbourhood, results) %>%
+  unnest(results)
+```
+
+Make a plot!
+
+```{r}
+manhattan_analysis %>%
+  filter(term == "stars") %>%
+  mutate(
+    neighbourhood = fct_reorder(neighbourhood, estimate)
+  ) %>%
+  ggplot(aes(x = neighbourhood, y = estimate)) + 
+  geom_point() + 
+  theme(axis.text = element_text(angle = 45, hjust = 1)) #make x axis more readable 
+```
+
