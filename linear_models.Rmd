@@ -1,0 +1,88 @@
+---
+title: "Linear Model Lecture"
+output: github_document
+---
+
+```{r}
+library(tidyverse)
+library(p8105.datasets)
+
+set.seed(1)
+
+```
+
+Load NYC airbnb data. 
+
+```{r}
+data(nyc_airbnb)
+```
+
+Look at the data / do some cleaning. 
+
+```{r}
+nyc_airbnb <-  
+  nyc_airbnb %>%
+  mutate( # re label the predictor 
+    stars = review_scores_location / 2
+  ) %>%
+  rename(
+    borough = neighbourhood_group
+  ) %>%
+  filter(borough != "Staten Island") %>%
+  select(price, stars, borough, room_type, neighbourhood)
+```
+
+
+Do regression!!!
+
+```{r}
+fit = lm(price ~ stars + borough, data = nyc_airbnb) #R constructed borough from categorical names into a factor, by default it will pick by alphabetical order so bronx becomes the reference 
+fit
+```
+
+Do some additional cleaning then refit. Set the reference differently, and it changes the model output!
+
+```{r} 
+#to check the counts as it informs fctinfreq function 
+nyc_airbnb %>%
+  count(borough)
+
+nyc_airbnb <- 
+  nyc_airbnb %>%
+  mutate(
+    borough = fct_infreq(borough), #putting the categories in order of how commonly they appear in the dataset - in this case the reference is Manhattan as it has the most number of counts (refer to count(borough) before)
+    room_type = fct_infreq(room_type)
+  )
+
+refit = lm(price ~ stars + borough, data = nyc_airbnb)
+refit
+```
+
+Look at 'lm' stuff. It looks like a skewed distribution! 
+
+```{r, eval = FALSE}
+summary(refit)
+names(summary(refit))
+summary(refit[["coefficients"]])
+summary(refit)[["df"]]
+
+fitted.values(refit)
+```
+
+
+Look at the cleaner `lm` stuff! Pull out the things we care about: coefficients, estimates, std. errors, p-values, etc. 
+
+```{r}
+refit %>%
+  broom::tidy() %>%
+  mutate( 
+    term = str_replace(term, "borough", "Borough: ")
+  ) %>%
+  select(term, estimate, p.value) %>%
+  knitr::kable(digits = 3)
+
+#this will show a bit more things like r squared and adjusted r squared 
+refit %>%
+  broom::glance()
+```
+
