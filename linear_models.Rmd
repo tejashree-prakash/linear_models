@@ -33,7 +33,7 @@ nyc_airbnb <-
 ```
 
 
-Do regression!!!
+## Do regression!!!
 
 ```{r}
 fit = lm(price ~ stars + borough, data = nyc_airbnb) #R constructed borough from categorical names into a factor, by default it will pick by alphabetical order so bronx becomes the reference 
@@ -84,5 +84,155 @@ refit %>%
 #this will show a bit more things like r squared and adjusted r squared 
 refit %>%
   broom::glance()
+```
+
+
+
+## Diagnostics 
+
+Look at residuals within the previous model. Produce visualizations of the residuals to see overall distributions! This can help to see if model assumptions are being violated. 
+
+```{r}
+nyc_airbnb %>%
+  modelr::add_residuals(refit) %>%
+  modelr::add_predictions(fit) %>% #adds predictions for prices 
+  filter(resid < 1000) %>%
+  ggplot(aes( x = resid)) + 
+  geom_histogram()
+
+nyc_airbnb %>%
+  modelr::add_residuals(refit) %>%
+  modelr::add_predictions(fit) %>% #adds predictions for prices 
+  filter(resid < 1000) %>%
+  ggplot(aes( x = borough, y = resid)) + 
+  geom_violin()
+
+nyc_airbnb %>%
+  modelr::add_residuals(refit) %>%
+  modelr::add_predictions(fit) %>% #adds predictions for prices 
+  filter(resid < 1000) %>%
+  ggplot(aes( x = stars, y = resid)) + 
+  geom_point()
+```
+
+Hypothesis testing 
+
+```{r}
+refit %>%
+  broom::tidy()
+```
+
+What about a categorical variable?
+
+```{r}
+refit_alt <- lm(price ~ stars + borough + room_type, data = nyc_airbnb)
+refit_null <- lm(price ~ stars + borough, data = nyc_airbnb)
+
+refit_alt
+refit_null
+
+anova(refit_null, refit_alt) %>%
+  broom::tidy()
+```
+
+
+
+## Interactions vs nested data
+
+
+The interactions will be demonstrated by :: in the output. 
+```{r}
+#Let's allow the affect of stars to differ by borough, and same with room type. 
+refit_interactions <- 
+  lm(price ~ stars*borough + room_type*borough, data = nyc_airbnb)
+
+refit_interactions %>%
+  broom::tidy()
+```
+
+
+Let's just look at Brooklyn first. 
+
+```{r}
+nyc_airbnb %>%
+  filter(borough == "Brooklyn") %>%
+  lm(price ~ stars + room_type, data = _) %>% #_ is the placeholder to say dataset goes here
+  broom::tidy()
+  
+
+nyc_airbnb %>%
+  filter(borough == "Queens") %>%
+  lm(price ~ stars + room_type, data = _) %>% #_ is the placeholder to say dataset goes here
+  broom::tidy()
+
+nyc_airbnb %>%
+  filter(borough == "Manhattan") %>%
+  lm(price ~ stars + room_type, data = _) %>% #_ is the placeholder to say dataset goes here
+  broom::tidy()
+```
+
+
+Write a short function instead of manually. 
+
+```{r}
+lm_airbnb <- function(df) {
+  
+  lm(price ~ stars + room_type, data = df)
+  
+}
+
+#Can write the filter manually, but the lm is iterated. 
+nyc_airbnb %>%
+  filter(borough == "Queens") %>%
+  lm_airbnb() %>%
+  broom::tidy()
+```
+
+Create a list of dataframes, and iterate to fit the model each time. 
+
+```{r}
+#separating by borough, but keeping the other four columsn (price, stars, etc.) for each borough 
+nested_lm_results = 
+  nyc_airbnb %>%
+  nest(data = -borough) %>%
+  mutate(
+    fits = map(data, lm_airbnb), #telling it to iterate lm model over each borough
+    results = map(fits, broom::tidy) #cleaning it up by iterating broomtidy  
+  ) %>%
+  select(borough, results) %>% #only want the borough and then the result estimations 
+  unnest(results) #releases the results 
+```
+
+
+Do some untidying, make the term type the columns. 
+
+```{r}
+nested_lm_results %>%
+  select(borough, term, estimate) %>%
+  pivot_wider(
+    names_from = term, 
+    values_from = estimate
+  )
+```
+
+Use an *anonymous* function instead of `lm_airbnb`. This doesn't require you to have created and initialized a function previously, it lets you create a transient function within the code instead. This does the exact same thing as before, but more consolidated. 
+
+```{r}
+nested_lm_results = 
+  nyc_airbnb %>%
+  nest(data = -borough) %>%
+  mutate(
+    fits = map(data, \(df) lm(price ~ stars + room_type, data = df)), #instead of creating a function, we can input a transient function here that doesn't really exist standalone 
+    results = map(fits, broom::tidy) 
+  ) %>%
+  select(borough, results) %>% 
+  unnest(results) 
+
+nested_lm_results %>%
+  select(borough, term, estimate) %>%
+  pivot_wider(
+    names_from = term, 
+    values_from = estimate
+  )
 ```
 
