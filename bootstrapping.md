@@ -1,0 +1,334 @@
+Bootstrapping
+================
+
+``` r
+library(tidyverse)
+```
+
+    ## ── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+    ## ✔ dplyr     1.1.4     ✔ readr     2.1.5
+    ## ✔ forcats   1.0.0     ✔ stringr   1.5.1
+    ## ✔ ggplot2   3.5.2     ✔ tibble    3.3.0
+    ## ✔ lubridate 1.9.4     ✔ tidyr     1.3.1
+    ## ✔ purrr     1.1.0     
+    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+    ## ✖ dplyr::filter() masks stats::filter()
+    ## ✖ dplyr::lag()    masks stats::lag()
+    ## ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+
+``` r
+library(p8105.datasets)
+library(modelr)
+```
+
+Simulate data.
+
+``` r
+set.seed(1)
+
+n_samp = 250
+
+#constant variance df
+sim_df_const = 
+  tibble(
+      x = rnorm(n_samp, 1, 1), #mean is 1, std is 1
+      error = rnorm(n_samp, 0 , 1), 
+      y = 2 + 3 * x + error
+    )
+
+#nonconstant variance df
+sim_df_nonconst = 
+  sim_df_const %>%
+  mutate(
+    error = .75 * error * x, #error distribution depends on x (violates assumptions)
+    y = 2 + 3 * x + error)
+```
+
+Look at these data
+
+``` r
+sim_df_const %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point()
+```
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+
+``` r
+sim_df_nonconst %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point()
+```
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-3-2.png)<!-- -->
+
+What does `lm` do for these? The errors aren’t that different between
+each other even when you try to make the variance nonconstant, this is
+where we need bootstrapping to randomly resample a bunch to get a more
+accurate SE.
+
+``` r
+sim_df_const %>%
+  lm(y ~ x, data = .) %>%
+  broom::tidy() %>%
+  knitr::kable(digits = 3)
+```
+
+| term        | estimate | std.error | statistic | p.value |
+|:------------|---------:|----------:|----------:|--------:|
+| (Intercept) |    1.977 |     0.098 |    20.157 |       0 |
+| x           |    3.045 |     0.070 |    43.537 |       0 |
+
+``` r
+sim_df_nonconst %>%
+  lm(y ~ x, data = .) %>%
+  broom::tidy() %>%
+  knitr::kable(digits = 3)
+```
+
+| term        | estimate | std.error | statistic | p.value |
+|:------------|---------:|----------:|----------:|--------:|
+| (Intercept) |    1.934 |     0.105 |    18.456 |       0 |
+| x           |    3.112 |     0.075 |    41.661 |       0 |
+
+## Write a function to draw a bootstrap sample. Sample something over and over again, get standard errors that match assumptions in stats. If we do something over and over again, we have a confidence interval for parameters that are correct.
+
+``` r
+boot_sample = function(df) {
+  sample_frac(df, size = 1, replace = TRUE) #bootstrapping part - whatever df you put in, give same sample size back, replace = TRUE means give me a different sample every time 
+}
+```
+
+Does this work? It’s overlaying data points on top of each other, and it
+can be visualized by the transparency. Those that are darker means that
+there were two of the point that were called in this sample. You get a
+different bootstrapped sample each time, drawing different samples from
+the same data.
+
+``` r
+sim_df_nonconst %>%
+  boot_sample() %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point(alpha = 0.5) + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  xlim(c(-2, 4)) + 
+  ylim(c(-5, 16))
+```
+
+    ## `geom_smooth()` using formula = 'y ~ x'
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+
+## So I want to formalize this a bit and extract results.
+
+``` r
+boot_straps = 
+  tibble( 
+    iter = 1:5000 #Generate bootstramp samples - 5000 dataframes
+    ) %>% #map the origination of bootstrapped sample 
+  mutate(
+    bootstrap_sample = map(iter, \(i) boot_sample(df = sim_df_nonconst)) #creating a function where teh input is the iteration, every time you run the function you don't output i and it can run over and over again 
+  )
+```
+
+(quick check)
+
+``` r
+boot_straps %>%
+  pull(bootstrap_sample) %>%
+  nth(2) %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point(alpha = 0.5) + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  xlim(c(-2, 4)) + 
+  ylim(c(-5, 16))
+```
+
+    ## `geom_smooth()` using formula = 'y ~ x'
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
+
+## Actually run my analyses! Have 5000 iterations of data frames, 5000 linear model fits, 5000 cleaned results
+
+``` r
+bootstrap_results = 
+  boot_straps %>% 
+  mutate( #take df and plug it in - where we do over and over the regression with each x, y
+    fits = map(bootstrap_sample, \(df) lm(y ~ x, data = df)),
+    results = map(fits, broom::tidy) #clean up the results, one column for intercept and one column for p-value
+  )
+```
+
+Look at results. Unnesting means unfolding the tibble status it was
+folded in before. Now when I did boostrapping and compare to the
+sim_df_noconst df from the beginning - I get more accurate results for
+SE and mean values.
+
+``` r
+bootstrap_results %>%
+  select(iter, results) %>%
+  unnest(results) %>%
+  group_by(term) %>%
+  summarize(
+    mean = mean(estimate),
+    se = sd(estimate)
+  )
+```
+
+    ## # A tibble: 2 × 3
+    ##   term         mean     se
+    ##   <chr>       <dbl>  <dbl>
+    ## 1 (Intercept)  1.93 0.0762
+    ## 2 x            3.11 0.103
+
+Look at these first
+
+``` r
+bootstrap_results %>%
+  select(iter, results) %>%
+  unnest(results) %>%
+  filter(term == "x") %>%
+  ggplot(aes(x = estimate)) + 
+  geom_density()
+```
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
+
+``` r
+bootstrap_results %>%
+  select(iter, results) %>%
+  unnest(results) %>%
+  group_by(term) %>%
+  summarize(
+    ci_lower = quantile(estimate, 0.025),
+    ci_upper = quantile(estimate, 0.975)
+  )
+```
+
+    ## # A tibble: 2 × 3
+    ##   term        ci_lower ci_upper
+    ##   <chr>          <dbl>    <dbl>
+    ## 1 (Intercept)     1.78     2.09
+    ## 2 x               2.91     3.32
+
+## Do it again but faster this time - fitting models and extracting results but in one go. Keeping the unnest step as an extra still, though.
+
+``` r
+bootstrap_results <- 
+  sim_df_nonconst %>%
+  bootstrap(n = 5000) %>% #how many dfs you want
+  mutate(
+    df = map(strap, as_tibble), 
+    fits = map(df, \(df) lm( y ~ x, data = df)), #map estimates of linear regression model over each iteration
+    results = (map(fits, broom::tidy)) #clean up
+  ) %>%
+  select(.id, results) %>%
+  unnest(results) #unnest the results 
+```
+
+Look at what this means.
+
+``` r
+bootstrap_results %>%
+  group_by(term) %>%
+  summarize(
+    mean = mean(estimate),
+    se = sd(estimate)
+  )
+```
+
+    ## # A tibble: 2 × 3
+    ##   term         mean     se
+    ##   <chr>       <dbl>  <dbl>
+    ## 1 (Intercept)  1.93 0.0759
+    ## 2 x            3.11 0.103
+
+If you’re in a case where assumptions are met (linear model works), the
+bootstrapping will get the same results, as we see with running it with
+the sim_df_const df. If you get the same estimates after bootstrapping,
+then you know the simple lm model in the beginning is fine.
+
+``` r
+bootstrap_results <- 
+  sim_df_const %>%
+  bootstrap(n = 5000) %>% #how many dfs you want
+  mutate(
+    df = map(strap, as_tibble), 
+    fits = map(df, \(df) lm( y ~ x, data = df)), #map estimates of linear regression model over each iteration
+    results = (map(fits, broom::tidy)) #clean up
+  ) %>%
+  select(.id, results) %>%
+  unnest(results) #unnest the results 
+
+bootstrap_results %>%
+  group_by(term) %>%
+  summarize(
+    mean = mean(estimate),
+    se = sd(estimate)
+  )
+```
+
+    ## # A tibble: 2 × 3
+    ##   term         mean     se
+    ##   <chr>       <dbl>  <dbl>
+    ## 1 (Intercept)  1.98 0.0975
+    ## 2 x            3.05 0.0703
+
+## AirBnB dataset
+
+Remember this one?
+
+``` r
+data("nyc_airbnb")
+
+nyc_airbnb <- 
+  nyc_airbnb %>%
+  mutate(stars = review_scores_location /2) %>%
+  rename(
+    borough = neighbourhood_group
+  ) %>%
+  filter(
+    borough != "Staten Island"
+  ) %>%
+  drop_na(price, stars, room_type) %>%
+  select(price, stars, room_type, borough)
+```
+
+What does it look like? Generally looks like as stars goes up, price go
+up.
+
+``` r
+nyc_airbnb %>%
+  ggplot(aes(x = stars, y = price, color = room_type)) + 
+  geom_point(alpha = 0.5)
+```
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-17-1.png)<!-- -->
+
+Bootstrap to verify the estimates would be right. The code will be
+pretty familiar…
+
+``` r
+airbnb_bootstrap_results <- 
+  nyc_airbnb %>%
+  filter(borough == "Manhattan") %>%
+  bootstrap(n = 1000) %>% #start small and make sure it works before changing it to 1000 +
+  mutate(
+    df = map(strap, as_tibble),
+    fits = map(df, \(df) lm(price ~ stars + room_type, data = df)),
+    results = map(fits, broom::tidy)
+  ) %>%
+  select(.id, results) %>%
+  unnest(results)
+```
+
+Look at the distribution of slope for stars.
+
+``` r
+airbnb_bootstrap_results %>%
+  filter(term == "stars") %>%
+  ggplot(aes(x = estimate)) + 
+  geom_density()
+```
+
+![](bootstrapping_files/figure-gfm/unnamed-chunk-19-1.png)<!-- -->
